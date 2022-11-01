@@ -956,6 +956,16 @@ td.content {
     top: 0;
 }
 
+/*Work around an issue: https://github.com/JetBrains/kotlin-playground/issues/91*/
+/* for class*/
+.content.sourceset-dependent-content:not([data-active]) {
+    display: block !important;
+    visibility: hidden;
+    height: 0;
+    position: fixed;
+    top: 0;
+}
+
 .with-platform-tags {
     display: flex;
 }
