@@ -6,7 +6,6 @@ import org.jetbrains.dokka.base.resolvers.anchors.SymbolAnchorHint
 import org.jetbrains.dokka.base.signatures.SignatureProvider
 import org.jetbrains.dokka.base.transformers.documentables.CallableExtensions
 import org.jetbrains.dokka.base.transformers.documentables.ClashingDriIdentifier
-import org.jetbrains.dokka.base.transformers.documentables.InheritorsInfo
 import org.jetbrains.dokka.base.transformers.pages.comments.CommentsToContentConverter
 import org.jetbrains.dokka.base.transformers.pages.tags.CustomTagContentProvider
 import org.jetbrains.dokka.base.translators.documentables.PageContentBuilder.DocumentableContentBuilder
@@ -17,7 +16,6 @@ import org.jetbrains.dokka.model.properties.PropertyContainer
 import org.jetbrains.dokka.model.properties.WithExtraProperties
 import org.jetbrains.dokka.pages.*
 import org.jetbrains.dokka.utilities.DokkaLogger
-import org.jetbrains.kotlin.utils.addToStdlib.safeAs
 import kotlin.reflect.KClass
 
 internal const val KDOC_TAG_HEADER_LEVEL = 4
@@ -234,7 +232,6 @@ open class DefaultPageCreator(
                     styles = setOf(TextStyle.UnderCoverText)
                 ) {
                     +contentForDescription(p)
-                    +inheritorsSection(p, p.dri, p.sourceSets)
                 }
             }
         }
@@ -243,105 +240,18 @@ open class DefaultPageCreator(
         }
     }
 
-
-    /**
-     * classlikes
-     */
-    private fun inheritorsSection(
-        scopes: List<WithScope>,
-        sourceSets: Set<DokkaSourceSet>
-    ): List<ContentNode> {
-        val inheritors = scopes.fold(mutableMapOf<DokkaSourceSet, List<DRI>>()) { acc, scope ->
-            val inheritorsForScope =
-                scope.safeAs<WithExtraProperties<Documentable>>()?.let { it.extra[InheritorsInfo] }?.let { inheritors ->
-                    inheritors.value.filter { it.value.isNotEmpty() }
-                }.orEmpty()
-            inheritorsForScope.forEach { (k, v) ->
-                acc.compute(k) { _, value -> value?.plus(v) ?: v }
-            }
-            acc
-        }
-
-        return inheritorsSection(
-            @Suppress("UNCHECKED_CAST")
-            (scopes as List<Documentable>).dri,
-            sourceSets,
-            inheritors
-        )
-    }
-
-    /**
-     * package
-     */
-    private fun inheritorsSection(
-        s: Documentable,
-        dri: DRI,
-        sourceSets: Set<DokkaSourceSet>
-    ): List<ContentNode> {
-        val inheritors =
-            s.safeAs<WithExtraProperties<Documentable>>()?.let { it.extra[InheritorsInfo] }?.let { inheritors ->
-                inheritors.value.filter { it.value.isNotEmpty() }
-            }.orEmpty()
-
-        return inheritorsSection(setOf(dri), sourceSets, inheritors)
-    }
-
-    private fun inheritorsSection(
-        dri: Set<DRI>,
-        sourceSets: Set<DokkaSourceSet>,
-        inheritors: SourceSetDependent<List<DRI>>
-    ) = contentBuilder.contentFor(dri, sourceSets) {
-        if (inheritors.values.any()) {
-            header(KDOC_TAG_HEADER_LEVEL, "Inheritors", sourceSets = inheritors.keys.toSet())
-            +ContentTable(
-                header = listOf(contentBuilder.contentFor(mainDRI, mainSourcesetData) {
-                    text("Name")
-                }),
-                children = inheritors.entries.flatMap { entry -> entry.value.map { Pair(entry.key, it) } }
-                    .groupBy({ it.second }, { it.first }).map { (classlike, platforms) ->
-                        val label = classlike.classNames?.substringAfterLast(".") ?: classlike.toString()
-                            .also { logger.warn("No class name found for DRI $classlike") }
-                        buildGroup(
-                            setOf(classlike),
-                            platforms.toSet(),
-                            ContentKind.Inheritors,
-                            extra = mainExtra + SymbolAnchorHint(label, ContentKind.Inheritors)
-                        ) {
-                            link(label, classlike)
-                        }
-                    },
-                dci = DCI(dri, ContentKind.Inheritors),
-                sourceSets = sourceSets.toDisplaySourceSets(),
-                style = emptySet(),
-                extra = mainExtra + SimpleAttr.header("Inheritors")
-            )
-        }
-    }.children
-
     protected open fun contentForScopes(
         scopes: List<WithScope>,
         sourceSets: Set<DokkaSourceSet>
     ): ContentGroup {
         val types = scopes.flatMap { it.classlikes } + scopes.filterIsInstance<DPackage>().flatMap { it.typealiases }
-        val inheritors = scopes.fold(mutableMapOf<DokkaSourceSet, List<DRI>>()) { acc, scope ->
-            val inheritorsForScope =
-                scope.safeAs<WithExtraProperties<Documentable>>()?.let { it.extra[InheritorsInfo] }?.let { inheritors ->
-                    inheritors.value.filter { it.value.isNotEmpty() }
-                }.orEmpty()
-            inheritorsForScope.forEach { (k, v) ->
-                acc.compute(k) { _, value -> value?.plus(v) ?: v }
-            }
-            acc
-        }
-
         return contentForScope(
             @Suppress("UNCHECKED_CAST")
             (scopes as List<Documentable>).dri,
             sourceSets,
             types,
             scopes.flatMap { it.functions },
-            scopes.flatMap { it.properties },
-            inheritors
+            scopes.flatMap { it.properties }
         )
     }
 
@@ -354,12 +264,7 @@ open class DefaultPageCreator(
             s.classlikes,
             (s as? DPackage)?.typealiases ?: emptyList()
         ).flatten()
-        val inheritors =
-            s.safeAs<WithExtraProperties<Documentable>>()?.let { it.extra[InheritorsInfo] }?.let { inheritors ->
-                inheritors.value.filter { it.value.isNotEmpty() }
-            }.orEmpty()
-
-        return contentForScope(setOf(dri), sourceSets, types, s.functions, s.properties, inheritors)
+        return contentForScope(setOf(dri), sourceSets, types, s.functions, s.properties)
     }
 
     protected open fun contentForScope(
@@ -367,8 +272,7 @@ open class DefaultPageCreator(
         sourceSets: Set<DokkaSourceSet>,
         types: List<Documentable>,
         functions: List<DFunction>,
-        properties: List<DProperty>,
-        inheritors: SourceSetDependent<List<DRI>>
+        properties: List<DProperty>
     ) = contentBuilder.contentFor(dri, sourceSets) {
         divergentBlock("Types", types, ContentKind.Classlikes, extra = mainExtra + SimpleAttr.header("Types"))
         if (separateInheritedMembers) {
@@ -382,31 +286,6 @@ open class DefaultPageCreator(
             functionsBlock("Functions", functions)
             propertiesBlock("Properties", properties, sourceSets)
         }
-//        if (inheritors.values.any()) {
-//            header(2, "Inheritors") { }
-//            +ContentTable(
-//                header = listOf(contentBuilder.contentFor(mainDRI, mainSourcesetData) {
-//                    text("Name")
-//                }),
-//                children = inheritors.entries.flatMap { entry -> entry.value.map { Pair(entry.key, it) } }
-//                    .groupBy({ it.second }, { it.first }).map { (classlike, platforms) ->
-//                        val label = classlike.classNames?.substringAfterLast(".") ?: classlike.toString()
-//                            .also { logger.warn("No class name found for DRI $classlike") }
-//                        buildGroup(
-//                            setOf(classlike),
-//                            platforms.toSet(),
-//                            ContentKind.Inheritors,
-//                            extra = mainExtra + SymbolAnchorHint(label, ContentKind.Inheritors)
-//                        ) {
-//                            link(label, classlike)
-//                        }
-//                    },
-//                dci = DCI(dri, ContentKind.Inheritors),
-//                sourceSets = sourceSets.toDisplaySourceSets(),
-//                style = emptySet(),
-//                extra = mainExtra + SimpleAttr.header("Inheritors")
-//            )
-//        }
     }
 
     private fun Iterable<DFunction>.sorted() =
@@ -433,7 +312,7 @@ open class DefaultPageCreator(
                     documentables.forEach {
                         +buildSignature(it)
                         +contentForDescription(it)
-                        +inheritorsSection(documentables.filterIsInstance<WithScope>(), documentables.sourceSets)
+                        +contentForInheritors(it, documentables)
                     }
                 }
             }
@@ -514,6 +393,7 @@ open class DefaultPageCreator(
         d: Documentable
     ): List<ContentNode> {
         val platforms = d.sourceSets.toSet()
+        val tags = d.groupedTags
 
         return contentBuilder.contentFor(d, styles = setOf(TextStyle.Block)) {
             deprecatedSectionContent(d, platforms)
@@ -522,33 +402,16 @@ open class DefaultPageCreator(
             customTagSectionContent(d, platforms, customTagContentProviders)
             unnamedTagSectionContent(d, platforms) { toHeaderString() }
 
-        }.children + contentForComments(d.dri, platforms, d.groupedTags)
+            paramsSectionContent(tags)
+            seeAlsoSectionContent(tags)
+            throwsSectionContent(tags)
+            samplesSectionContent(tags)
+        }.children
     }
 
-    protected open fun contentForComments(
-        d: Documentable,
-        isPlatformHintedContent: Boolean = true
-    ) = contentForComments(d.dri, d.sourceSets, d.groupedTags, isPlatformHintedContent)
-
-    protected open fun contentForComments(
-        d: List<Documentable>,
-        isPlatformHintedContent: Boolean = true
-    ) = contentForComments(d.first().dri, d.sourceSets, d.groupedTags, isPlatformHintedContent)
-
-    protected open fun contentForComments(
-        dri: DRI,
-        sourceSets: Set<DokkaSourceSet>,
-        tags: GroupedTags,
-        isPlatformHintedContent: Boolean = true
-    ): List<ContentNode> {
-
-        return contentBuilder.contentFor(dri, sourceSets) {
-            if (tags.isNotEmpty()) {
-                contentForParams(sourceSets, tags)
-                contentForSeeAlso(sourceSets, tags)
-                contentForThrows(tags)
-                contentForSamples(tags)
-            }
+    protected open fun contentForInheritors(d: Documentable, documentables: List<Documentable>): List<ContentNode> {
+        return contentBuilder.contentFor(d, styles = setOf(TextStyle.Block)) {
+            inheritorsSectionContent(documentables, logger)
         }.children
     }
 
@@ -715,8 +578,7 @@ open class DefaultPageCreator(
     }
 
     private fun DocumentableContentBuilder.contentForCustomTagsBrief(documentable: Documentable) {
-        val customTags = documentable.customTags
-        if (customTags.isEmpty()) return
+        val customTags = documentable.customTags ?: return
 
         documentable.sourceSets.forEach { sourceSet ->
             customTags.forEach { (_, sourceSetTag) ->
@@ -745,17 +607,10 @@ internal val Documentable.groupedTags: GroupedTags
         doc.children.map { pd to it }.toList()
     }.groupBy { it.second::class }
 
-internal val List<Documentable>.groupedTags: GroupedTags
-    get() = this.flatMap {
-        it.documentation.flatMap { (pd, doc) ->
-            doc.children.map { pd to it }.toList()
-        }
-    }.groupBy { it.second::class }
-
 internal val Documentable.descriptions: SourceSetDependent<Description>
     get() = groupedTags.withTypeUnnamed()
 
-internal val Documentable.customTags: Map<String, SourceSetDependent<CustomTagWrapper>>
+internal val Documentable.customTags: Map<String, SourceSetDependent<CustomTagWrapper>>?
     get() = groupedTags.withTypeNamed()
 
 private val Documentable.hasSeparatePage: Boolean
@@ -770,8 +625,7 @@ internal inline fun <reified T : TagWrapper> GroupedTags.withTypeUnnamed(): Sour
     (this[T::class] as List<Pair<DokkaSourceSet, T>>?)?.toMap().orEmpty()
 
 @Suppress("UNCHECKED_CAST")
-internal inline fun <reified T : NamedTagWrapper> GroupedTags.withTypeNamed(): Map<String, SourceSetDependent<T>> =
+internal inline fun <reified T : NamedTagWrapper> GroupedTags.withTypeNamed(): Map<String, SourceSetDependent<T>>? =
     (this[T::class] as List<Pair<DokkaSourceSet, T>>?)
         ?.groupByTo(linkedMapOf()) { it.second.name }
         ?.mapValues { (_, v) -> v.toMap() }
-        .orEmpty()
